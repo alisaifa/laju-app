@@ -160,6 +160,7 @@ if 'page' not in st.session_state:
 local_css(st.session_state['dark_mode'])
 
 # --- HALAMAN LOGIN ---
+# --- GANTI BAGIAN INI SAJA ---
 def login_page():
     st.markdown("<div class='train-container'><div class='train-icon'>🚚 💨 LAJU LOGISTICS 💨 🚚</div></div>", unsafe_allow_html=True)
     st.title("Login Laju App")
@@ -172,23 +173,46 @@ def login_page():
         if submitted:
             try:
                 sheet = get_data("User")
-                users = sheet.get_all_records()
-                df = pd.DataFrame(users)
+                all_data = sheet.get_all_records()
+                df = pd.DataFrame(all_data)
                 
-                # Cek User
-                user = df[(df['Nama'] == username) & (df['Password'] == str(password))]
+                # --- LOGIKA BARU (ANTI GAGAL) ---
+                
+                # 1. Paksa semua kolom jadi String (Teks) biar angka 123 terbaca "123"
+                df['Nama'] = df['Nama'].astype(str)
+                df['Password'] = df['Password'].astype(str)
+                
+                # 2. Bersihkan spasi tidak sengaja (Trim whitespace)
+                # Misal: "admin " jadi "admin"
+                df['Nama'] = df['Nama'].str.strip()
+                df['Password'] = df['Password'].str.strip()
+                
+                # 3. Bersihkan inputan user juga
+                input_user = str(username).strip()
+                input_pass = str(password).strip()
+
+                # --- DEBUGGING (HAPUS KALAU SUDAH BISA) ---
+                # Ini bakal nampilin tabel data user di layar biar abang bisa cek isinya apa
+                st.info("--- MODE DEBUGGING AKTIF ---")
+                st.write("Data yang ada di Database Google Sheets:")
+                st.dataframe(df) # Cek tabel ini muncul gak? Passwordnya apa?
+                st.write(f"Yang abang ketik: User='{input_user}', Pass='{input_pass}'")
+                # ------------------------------------------
+                
+                # 4. Cek Kecocokan
+                user = df[(df['Nama'] == input_user) & (df['Password'] == input_pass)]
                 
                 if not user.empty:
                     st.session_state['logged_in'] = True
                     st.session_state['user_info'] = user.iloc[0].to_dict()
                     st.session_state['page'] = 'Dashboard'
-                    st.success("Login Berhasil! Selamat datang di Laju.")
+                    st.success("Login Berhasil! Tunggu sebentar...")
                     st.rerun()
                 else:
-                    st.error("Username/Password salah, silahkan coba lagi")
+                    st.error("Username/Password salah. Cek tabel di atas, samain persis!")
+                    
             except Exception as e:
-                st.error(f"Gagal koneksi database: {e}")
-
+                st.error(f"Error sistem: {e}")
 # --- HALAMAN DASHBOARD ---
 def dashboard_page():
     user = st.session_state['user_info']
@@ -649,4 +673,5 @@ def main():
         st.warning("Silakan Login terlebih dahulu.")
 
 if __name__ == "__main__":
+
     main()
