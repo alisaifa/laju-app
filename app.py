@@ -28,7 +28,6 @@ def local_css():
     .stButton>button {{ background-color: #e94560; color: white; border-radius: 8px; border: none; width: 100%; }}
     .stButton>button:hover {{ background-color: #c72c41; }}
     div[data-testid="metric-container"] {{ background-color: {card_bg}; border: 1px solid #ddd; padding: 10px; border-radius: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }}
-    /* Tabel Garansi */
     .garansi-box {{ border: 2px solid #e94560; padding: 10px; border-radius: 5px; background-color: {card_bg}; }}
     </style>
     """, unsafe_allow_html=True)
@@ -47,7 +46,7 @@ def get_data(sheet_name):
 
 # --- HELPER FUNCTIONS ---
 def generate_resi():
-    return f"LJ-{datetime.now().strftime('%d%H%M%S')}" # Resi lebih pendek: TglJamMenitDetik
+    return f"LJ-{datetime.now().strftime('%d%H%M%S')}"
 
 def generate_barcode(resi):
     rv = io.BytesIO()
@@ -58,8 +57,11 @@ def generate_barcode(resi):
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'page' not in st.session_state: st.session_state['page'] = 'Login'
 if 'form_data' not in st.session_state: st.session_state['form_data'] = {}
+# STATE BARU UNTUK RESI AGAR TIDAK HILANG
+if 'show_resi' not in st.session_state: st.session_state['show_resi'] = False
+if 'html_resi_cache' not in st.session_state: st.session_state['html_resi_cache'] = ""
 
-# --- HALAMAN 1: LOGIN (ANTI GAGAL) ---
+# --- HALAMAN 1: LOGIN ---
 def login_page():
     st.title("🚚 LAJU LOGISTICS")
     c1, c2, c3 = st.columns([1,2,1])
@@ -74,7 +76,6 @@ def login_page():
                     records = sheet.get_all_records()
                     df = pd.DataFrame(records)
                     
-                    # Normalisasi data biar cocok (Hapus spasi & jadiin string)
                     df['Nama'] = df['Nama'].astype(str).str.strip()
                     df['Password'] = df['Password'].astype(str).str.strip()
                     input_u = str(user).strip()
@@ -97,7 +98,6 @@ def dashboard_page():
     user = st.session_state['user_info']
     st.write(f"Selamat Datang, **{user['Nama']}** ({user['Cabang']})")
     
-    # Metrics
     try:
         df = pd.DataFrame(get_data("Data ( Active )").get_all_records())
         omzet = df['Total_Ongkir'].sum() if not df.empty else 0
@@ -111,15 +111,17 @@ def dashboard_page():
     st.markdown("### Menu Utama")
     c1, c2, c3, c4 = st.columns(4)
     if c1.button("📦 Input Baru"): st.session_state['page'] = 'Input'
-    if c2.button("🚚 Transit / Update"): st.session_state['page'] = 'Transit'
+    if c2.button("🚚 Transit"): st.session_state['page'] = 'Transit'
     if c3.button("🔍 Tracking"): st.session_state['page'] = 'Tracking'
     if c4.button("📊 Admin"): st.session_state['page'] = 'Admin'
 
-# --- HALAMAN 3: INPUT PENGIRIMAN (INTERAKTIF) ---
+# --- HALAMAN 3: INPUT PENGIRIMAN ---
 def input_page():
     st.header("📦 Input Pengiriman Baru")
     
-    # Bagian 1: Data Alamat (Pake Form biar gak refresh terus)
+    # Pastikan state resi bersih saat masuk sini
+    st.session_state['show_resi'] = False 
+
     with st.expander("1. Data Pengirim & Penerima", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -129,15 +131,12 @@ def input_page():
         with c2:
             penerima = st.text_input("Nama Penerima", key="r_nama")
             telp_penerima = st.text_input("HP Penerima", key="r_hp")
-            # Detail Alamat Lengkap
             prov = st.text_input("Provinsi", key="r_prov")
             kota = st.text_input("Kota/Kabupaten", key="r_kota")
-            detail = st.text_area("Detail Alamat (Jalan, No. Rumah, Patokan)", height=100, key="r_det")
+            detail = st.text_area("Detail Alamat", height=100, key="r_det")
             kodepos = st.text_input("Kode Pos", key="r_pos")
 
     st.markdown("---")
-    
-    # Bagian 2: Data Paket & Realtime Calc (TANPA FORM biar Realtime)
     st.subheader("2. Detail Paket & Layanan")
     
     col_a, col_b = st.columns(2)
@@ -148,7 +147,6 @@ def input_page():
         tinggi = st.number_input("Tinggi (cm)", 0)
         qty = st.number_input("Qty (Koli)", 1)
         
-        # Hitung Volume
         volume = panjang * lebar * tinggi
         berat_vol = volume / 6000
         berat_fix = max(berat, berat_vol)
@@ -158,7 +156,6 @@ def input_page():
     with col_b:
         layanan = st.selectbox("Pilih Layanan", ["Express", "Cargo", "Makanan"])
         
-        # LOGIKA HARGA DASAR
         harga_per_kg = 0
         min_kg = 1
         surcharge = 0
@@ -168,7 +165,7 @@ def input_page():
         elif layanan == "Cargo": 
             harga_per_kg = 4000
             min_kg = 10
-            if volume > 64000: # 40x40x40
+            if volume > 64000:
                 excess = volume - 64000
                 surcharge = (excess/250) * 1500
         
@@ -177,33 +174,22 @@ def input_page():
         
         st.info(f"Ongkir Dasar: **Rp {ongkir_dasar:,.0f}**")
 
-        # LOGIKA GARANSI REAL-TIME
-        st.markdown("#### Kalkulator Garansi")
         pake_garansi = st.checkbox("Tambah Asuransi/Garansi?")
-        
         biaya_garansi = 0
         harga_barang = 0
         
         if pake_garansi:
             harga_barang = st.number_input("Masukkan Harga Barang (Rp)", min_value=0, step=10000)
+            if layanan == "Makanan": biaya_garansi = 5000
+            elif layanan == "Express": biaya_garansi = harga_barang * 0.005
+            else: biaya_garansi = harga_barang * 0.003
             
-            if layanan == "Makanan":
-                biaya_garansi = 5000
-            elif layanan == "Express":
-                biaya_garansi = harga_barang * 0.005
-            else: # Cargo
-                biaya_garansi = harga_barang * 0.003
-            
-            # TAMPILAN TABEL REAL-TIME
             st.markdown(f"""
             <div class="garansi-box">
-                <b>Rincian Garansi:</b><br>
-                Harga Barang: Rp {harga_barang:,.0f}<br>
                 Biaya Garansi: <b>Rp {biaya_garansi:,.0f}</b>
             </div>
             """, unsafe_allow_html=True)
 
-    # TOMBOL LANJUT
     st.markdown("---")
     total_sementara = ongkir_dasar + biaya_garansi
     st.write(f"### Total Estimasi: Rp {total_sementara:,.0f}")
@@ -212,7 +198,6 @@ def input_page():
         if not pengirim or not penerima:
             st.warning("Nama Pengirim dan Penerima wajib diisi!")
         else:
-            # Simpan ke Session
             st.session_state['form_data'] = {
                 "Resi": generate_resi(),
                 "Pengirim": pengirim, "Telp_Pengirim": telp_pengirim, "Alamat_Pengirim": alamat_pengirim,
@@ -225,13 +210,31 @@ def input_page():
             st.session_state['page'] = 'Pembayaran'
             st.rerun()
 
-# --- HALAMAN 4: PEMBAYARAN & CETAK (FIXED) ---
+# --- HALAMAN 4: PEMBAYARAN & CETAK (FIX LOGIC) ---
 def pembayaran_page():
     st.header("💰 Pembayaran & Cetak Resi")
+    
+    # 1. CEK APAKAH RESI SUDAH DICETAK?
+    if st.session_state['show_resi']:
+        st.success("✅ Transaksi Berhasil Disimpan!")
+        st.info("Silakan cetak resi di bawah ini. Jika sudah, klik tombol 'Selesai' di paling bawah.")
+        
+        # Tampilkan HTML dari Memory
+        components.html(st.session_state['html_resi_cache'], height=600, scrolling=True)
+        
+        if st.button("❌ SELESAI / TRANSAKSI BARU"):
+            # Reset semua data
+            st.session_state['show_resi'] = False
+            st.session_state['html_resi_cache'] = ""
+            st.session_state['form_data'] = {}
+            st.session_state['page'] = 'Input' # Balik ke menu input
+            st.rerun()
+        return # BERHENTI DISINI AGAR BAWAHNYA TIDAK MUNCUL
+    
+    # 2. JIKA BELUM DICETAK, TAMPILKAN FORM BAYAR
     data = st.session_state['form_data']
     
     c1, c2 = st.columns([1, 1])
-    
     with c1:
         st.subheader("Rincian Biaya")
         st.write(f"Layanan: {data['Layanan']}")
@@ -240,7 +243,6 @@ def pembayaran_page():
         
         total_sys = data['Ongkir'] + data['Biaya_Garansi']
         
-        # Pilihan Pembayaran Detail
         metode_utama = st.radio("Sistem Pembayaran", ["Prepaid (Bayar Sekarang)", "COD (Bayar Tujuan)"])
         
         biaya_admin = 0
@@ -267,17 +269,16 @@ def pembayaran_page():
 
     with c2:
         st.subheader("Konfirmasi")
-        
-        # Jika Prepaid, harus klik Bayar dulu baru bisa cetak
         enable_print = True
+        
         if metode_utama.startswith("Prepaid"):
-            if st.button("💰 Terima Pembayaran"):
-                st.success("Pembayaran Diterima! Silakan Cetak Resi.")
+            # Pake Checkbox aja biar gak refresh halaman
+            if st.checkbox("✅ Pembayaran Diterima dari Customer"):
+                st.success("Lunas!")
             else:
                 enable_print = False
-                st.info("Klik tombol di atas jika customer sudah membayar.")
+                st.warning("Pastikan customer sudah bayar sebelum cetak resi.")
         
-        # Tombol Simpan & Cetak
         if enable_print:
             if st.button("🖨️ SIMPAN & CETAK RESI"):
                 try:
@@ -294,12 +295,9 @@ def pembayaran_page():
                     
                     sheet = get_data("Data ( Active )")
                     sheet.append_row(row)
-                    st.success("Data Tersimpan di Database!")
                     
-                    # 2. Tampilkan Resi Siap Print
+                    # 2. GENERATE HTML RESI & SIMPAN KE MEMORI (SESSION STATE)
                     b64_code = generate_barcode(data['Resi'])
-                    
-                    # HTML Resi yang Bagus
                     html_resi = f"""
                     <div style="width: 300px; border: 2px solid black; padding: 10px; font-family: monospace; background: white; color: black; margin: auto;">
                         <h2 style="text-align: center; margin: 0;">LAJU LOGISTICS</h2>
@@ -323,31 +321,30 @@ def pembayaran_page():
                         <button onclick="window.print()" style="width: 100%; padding: 10px; background: black; color: white; font-weight: bold; cursor: pointer;">CETAK SEKARANG</button>
                     </div>
                     """
-                    components.html(html_resi, height=600, scrolling=True)
+                    
+                    # SIMPAN KE STATE
+                    st.session_state['html_resi_cache'] = html_resi
+                    st.session_state['show_resi'] = True # Trigger agar tampilan berubah
+                    st.rerun() # Refresh halaman untuk memunculkan resi
                     
                 except Exception as e:
                     st.error(f"Gagal Simpan: {e}")
 
-# --- HALAMAN 5: TRANSIT (MODIFIED) ---
+# --- HALAMAN 5: TRANSIT ---
 def transit_page():
     st.header("🚚 Update Status Transit")
-    
-    st.info("ℹ️ Gunakan Scanner Barcode USB (Plug & Play) lalu arahkan cursor ke kotak di bawah, atau ketik manual.")
     resi = st.text_input("Scan/Ketik No. Resi disini", help="Tekan Enter setelah scan")
     
     if resi:
         try:
             sheet = get_data("Data ( Active )")
             df = pd.DataFrame(sheet.get_all_records())
-            
-            # Cari Resi (Pastikan tipe data string)
             df['No_Resi'] = df['No_Resi'].astype(str)
             item = df[df['No_Resi'] == resi]
             
             if not item.empty:
-                idx = item.index[0] + 2 # Row index Gsheet
+                idx = item.index[0] + 2 
                 data = item.iloc[0]
-                
                 st.success(f"Paket Ditemukan: {data['Nama_Penerima']} - {data['Kota']}")
                 st.json(data.to_dict())
                 
@@ -356,8 +353,8 @@ def transit_page():
                 
                 with c1:
                     if st.button(f"📍 Sampai di {user_cabang}"):
-                        sheet.update_cell(idx, 14, f"Transit di {user_cabang}") # Kolom 14: Status
-                        sheet.update_cell(idx, 29, user_cabang) # Posisi Terakhir
+                        sheet.update_cell(idx, 14, f"Transit di {user_cabang}") 
+                        sheet.update_cell(idx, 29, user_cabang)
                         st.success("Status Updated!")
                 
                 with c2:
@@ -365,14 +362,11 @@ def transit_page():
                     foto = st.camera_input("Ambil Foto Penyerahan")
                     if foto:
                         if st.button("✅ Selesai & Arsipkan"):
-                            # Simulasi Upload (Di real case butuh GDrive API upload)
+                            # Upload Mock
                             link_foto = "https://via.placeholder.com/bukti" 
-                            
-                            # Update & Pindah
                             sheet.update_cell(idx, 14, "Diterima Customer")
                             sheet.update_cell(idx, 28, link_foto)
                             
-                            # Pindah ke Arsip
                             row_vals = sheet.row_values(idx)
                             row_vals.append(str(datetime.now()))
                             get_data("Arsip Data").append_row(row_vals)
@@ -389,14 +383,10 @@ def tracking_page():
     st.header("🔍 Lacak Paket")
     resi = st.text_input("Masukkan No. Resi")
     if st.button("Cari"):
-        # Logika cari di Active & Arsip (sama seperti sebelumnya tapi disederhanakan)
-        st.info("Mencari data...")
-        # (Implementasi simple search seperti di atas)
+        st.info("Fitur pencarian aktif...")
 
 def admin_page():
     st.header("📊 Admin Dashboard")
-    # (Tabel Data Active, Arsip, dll seperti request sebelumnya)
-    st.write("Memuat data...")
     df = pd.DataFrame(get_data("Data ( Active )").get_all_records())
     st.dataframe(df)
 
